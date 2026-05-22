@@ -1350,25 +1350,7 @@ const Renderer = (() => {
 
     ctx.save();
     ctx.translate(sx, sy);
-    if (Math.cos(a) < 0) ctx.scale(1, -1); // flip local Y before rotate so conning tower stays above hull when facing left
     ctx.rotate(a);
-
-    // Propeller (behind hull, drawn first)
-    const propT = Date.now() / 120;
-    ctx.save();
-    ctx.translate(-28, 0);
-    ctx.rotate(propT * (player.moving ? 3 : 0.15));
-    ctx.strokeStyle = '#b09040'; ctx.lineWidth = 2.5; ctx.lineCap = 'round';
-    for (let i = 0; i < 3; i++) {
-      ctx.save(); ctx.rotate(i * Math.PI * 2 / 3);
-      ctx.beginPath();
-      ctx.moveTo(0, 0);
-      ctx.bezierCurveTo(2, 5, 2, 10, 0, 12);
-      ctx.stroke();
-      ctx.restore();
-    }
-    ctx.lineCap = 'butt';
-    ctx.restore();
 
     // Hull shadow
     ctx.fillStyle = 'rgba(0,0,0,0.4)';
@@ -1398,7 +1380,26 @@ const Renderer = (() => {
     ctx.fillStyle = '#9a6820';
     ctx.beginPath(); ctx.moveTo(-24,0); ctx.lineTo(-16,-9); ctx.lineTo(-12,0); ctx.lineTo(-16,9); ctx.closePath(); ctx.fill();
 
-    // Conning tower
+    // Propeller — same approach as soldier sub: 3 spokes from hub
+    const propA = (Date.now() / 1000) * (player.moving ? 9 : 2.5);
+    ctx.save();
+    ctx.translate(-27, 0);
+    ctx.strokeStyle = '#d4b030'; ctx.lineWidth = 3; ctx.lineCap = 'round';
+    for (let i = 0; i < 3; i++) {
+      const pa = propA + (i / 3) * Math.PI * 2;
+      ctx.beginPath();
+      ctx.moveTo(Math.cos(pa) * 2, Math.sin(pa) * 2);
+      ctx.lineTo(Math.cos(pa) * 11, Math.sin(pa) * 11);
+      ctx.stroke();
+    }
+    ctx.lineCap = 'butt';
+    ctx.fillStyle = '#705010';
+    ctx.beginPath(); ctx.arc(0, 0, 3, 0, Math.PI*2); ctx.fill();
+    ctx.restore();
+
+    // Conning tower + periscope — flipped to screen-upward side when facing left
+    ctx.save();
+    if (Math.cos(a) < 0) ctx.scale(1, -1);
     ctx.fillStyle = '#a07828';
     ctx.beginPath(); ctx.ellipse(4, -11, 7, 4.5, 0, 0, Math.PI*2); ctx.fill();
     ctx.fillStyle = '#c09030';
@@ -1409,6 +1410,7 @@ const Renderer = (() => {
     ctx.beginPath(); ctx.moveTo(6,-15); ctx.lineTo(6,-23); ctx.lineTo(14,-23); ctx.stroke();
     ctx.fillStyle = '#30a8c0';
     ctx.beginPath(); ctx.arc(14,-23,2.5,0,Math.PI*2); ctx.fill();
+    ctx.restore();
 
     // Portholes
     [-10, 2, 12].forEach(px2 => {
