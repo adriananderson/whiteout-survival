@@ -38,10 +38,10 @@ class Player {
       let nx = this.x + dx * PLAYER_SPEED * dt;
       let ny = this.y + dy * PLAYER_SPEED * dt;
       // Building collision: axis-aligned sliding
-      if (_blockedByBuilding(nx, ny, this.r, map)) {
-        if (!_blockedByBuilding(nx, this.y, this.r, map))      { ny = this.y; }
-        else if (!_blockedByBuilding(this.x, ny, this.r, map)) { nx = this.x; }
-        else                                                     { nx = this.x; ny = this.y; }
+      if (_blockedByBuilding(nx, ny, this.r, map, true)) {
+        if (!_blockedByBuilding(nx, this.y, this.r, map, true))      { ny = this.y; }
+        else if (!_blockedByBuilding(this.x, ny, this.r, map, true)) { nx = this.x; }
+        else                                                           { nx = this.x; ny = this.y; }
       }
       this.x = nx; this.y = ny;
       // Island collision: smooth pushout along boundary segments (3 iterations to settle corners)
@@ -180,7 +180,7 @@ class Soldier {
       if (distE > stopDist) {
         const ndx = nTX - this.x, ndy = nTY - this.y;
         const nd = Math.hypot(ndx, ndy);
-        if (nd > 1) _moveWithSteering(this, ndx/nd, ndy/nd, this.speed, dt, map);
+        if (nd > 1) _moveWithSteering(this, ndx/nd, ndy/nd, this.speed, dt, map, true);
       } else {
         this.attackTimer += dt;
         if (this.attackTimer >= this.attackRate) {
@@ -206,7 +206,7 @@ class Soldier {
       if (d > 6) {
         const wa = Math.atan2(dy, dx) + this._wanderA;
         this.angle = wa;
-        _moveWithSteering(this, Math.cos(wa), Math.sin(wa), Math.min(this.speed, d * 3.5), dt, map);
+        _moveWithSteering(this, Math.cos(wa), Math.sin(wa), Math.min(this.speed, d * 3.5), dt, map, true);
       }
     }
 
@@ -546,9 +546,14 @@ function _findPath(fromX, fromY, toX, toY, map) {
 // 4. Direction scan  — systematic 16-direction search when all else fails;
 //    picks the passable direction closest to the target angle so the entity
 //    flows around convex corners and out of caves.
-function _blockedByBuilding(x, y, r, map) {
+function _blockedByBuilding(x, y, r, map, friendly = false) {
   const cr = r - 1;
-  const check = (cx, cy) => { const h = pixelToHex(cx, cy); return map.hasBuilding(h.c, h.r); };
+  const check = (cx, cy) => {
+    const h = pixelToHex(cx, cy);
+    if (!map.hasBuilding(h.c, h.r)) return false;
+    if (friendly) { const b = map.getBuildingAt(h.c, h.r); if (b?.type === 'recruit_post') return false; }
+    return true;
+  };
   return check(x-cr,y-cr) || check(x+cr,y-cr) || check(x-cr,y+cr) || check(x+cr,y+cr);
 }
 
@@ -592,17 +597,17 @@ function _pushOutOfIslands(x, y, r, map) {
   return { x, y };
 }
 
-function _moveWithSteering(entity, dirX, dirY, speed, dt, map) {
+function _moveWithSteering(entity, dirX, dirY, speed, dt, map, friendly = false) {
   const step = speed * dt;
   let ex = entity.x + dirX * step, ey = entity.y + dirY * step;
 
   if (!map) { entity.x = ex; entity.y = ey; return; }
 
   // Buildings: tile-based axis-aligned sliding
-  if (_blockedByBuilding(ex, ey, entity.r, map)) {
-    if (!_blockedByBuilding(ex, entity.y, entity.r, map))      { ey = entity.y; }
-    else if (!_blockedByBuilding(entity.x, ey, entity.r, map)) { ex = entity.x; }
-    else                                                         { ex = entity.x; ey = entity.y; }
+  if (_blockedByBuilding(ex, ey, entity.r, map, friendly)) {
+    if (!_blockedByBuilding(ex, entity.y, entity.r, map, friendly))      { ey = entity.y; }
+    else if (!_blockedByBuilding(entity.x, ey, entity.r, map, friendly)) { ex = entity.x; }
+    else                                                                   { ex = entity.x; ey = entity.y; }
   }
   entity.x = ex; entity.y = ey;
 
@@ -628,6 +633,20 @@ function _canMoveEnemy(x, y, r, map) {
   return !check(x-cr,y-cr) && !check(x+cr,y-cr) && !check(x-cr,y+cr) && !check(x+cr,y+cr);
 }
 
+function _canMoveFriendly(x, y, r, map) {
+  const h = pixelToHex(x, y);
+  if (map.isSolid(h.c, h.r)) return false;
+  const cr = r - 1;
+  const check = (cx, cy) => {
+    const t = pixelToHex(cx, cy);
+    if (map.isSolid(t.c, t.r)) return true;
+    if (!map.hasBuilding(t.c, t.r)) return false;
+    const b = map.getBuildingAt(t.c, t.r);
+    return b?.type !== 'recruit_post';
+  };
+  return !check(x-cr,y-cr) && !check(x+cr,y-cr) && !check(x-cr,y+cr) && !check(x+cr,y+cr);
+}
+
 function _findSpawnNear(cx, cy, r, map) {
   // Spiral outward in rings so we always find the nearest valid tile
   for (let dist = 0; dist <= TILE * 6; dist += TILE * 0.5) {
@@ -635,7 +654,7 @@ function _findSpawnNear(cx, cy, r, map) {
     for (let i = 0; i < steps; i++) {
       const a = (i / steps) * Math.PI * 2;
       const tx = cx + Math.cos(a) * dist, ty = cy + Math.sin(a) * dist;
-      if (_canMoveEnemy(tx, ty, r, map)) return { x: tx, y: ty };
+      if (_canMoveFriendly(tx, ty, r, map)) return { x: tx, y: ty };
     }
   }
   return { x: cx, y: cy };
