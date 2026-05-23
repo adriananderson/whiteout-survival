@@ -44,7 +44,20 @@ const Input = (() => {
       e.preventDefault();
     });
     canvas.addEventListener('mouseup', e => {
-      if (e.button === 0) { mouse.leftDown = false; mouse.leftUp = true; }
+      if (e.button === 0) {
+        mouse.leftDown = false; mouse.leftUp = true;
+        // Fire hit-area keys on mouse click too
+        const r = canvas.getBoundingClientRect();
+        const mx = (e.clientX - r.left) * (canvas.width  / r.width);
+        const my = (e.clientY - r.top)  * (canvas.height / r.height);
+        for (let i = TouchUI.hitAreas.length - 1; i >= 0; i--) {
+          const a = TouchUI.hitAreas[i];
+          if (mx >= a.x && mx <= a.x + a.w && my >= a.y && my <= a.y + a.h) {
+            pressed[a.key] = true;
+            break;
+          }
+        }
+      }
       if (e.button === 2) mouse.rightUp = true;
       e.preventDefault();
     });

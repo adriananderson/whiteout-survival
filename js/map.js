@@ -9,8 +9,6 @@ class GameMap {
     this.camps          = [];
     this.expeditions    = [];
     this.minimap        = null;
-    this.collisionEdges = [];
-    this.edgeBuckets    = new Map();
   }
 
   idx(c, r) { return r * COLS + c; }
@@ -139,24 +137,13 @@ class GameMap {
     const furn = new Building(furnCol, furnRow, 'furnace', 1);
     this.placeBuilding(furn);
 
-    // Recruitment camps
-    const used = new Set();
-    let attempts = 0;
-    while (this.camps.length < 10 && attempts++ < 2000) {
-      const c = 4 + Math.floor(rng() * (COLS-8));
-      const r = 4 + Math.floor(rng() * (ROWS-8));
-      const key = `${c},${r}`;
-      if (used.has(key)) continue;
-      if (Math.hypot(c-cx, r-cy) < 10) continue;
-      if (this.isSolid(c, r)) continue;
-      for (let dc = -2; dc <= 2; dc++)
-        for (let dr = -2; dr <= 2; dr++)
-          this.set(c+dc, r+dr, T_SAND);
-      used.add(key);
-      const count = 6 + Math.floor(rng() * 12);
-      const hcamp = hexCenter(c, r);
-      this.camps.push({ x: hcamp.x, y: hcamp.y, count, max: count, recruitTimer: 0, restoreTimer: 0 });
-    }
+    // Pre-place Recruit Station west of the hall
+    const rpCol = hallCol - 4, rpRow = hallRow + 2;
+    for (let dc = -1; dc <= 2; dc++)
+      for (let dr = -1; dr <= 2; dr++)
+        this.set(rpCol+dc, rpRow+dr, T_SAND);
+    const rp = new Building(rpCol, rpRow, 'recruit_post', 1);
+    this.placeBuilding(rp);
 
     // Expedition sites
     const expAngles = [0.4, 1.1, 1.9, 2.8, 4.2];
@@ -174,44 +161,7 @@ class GameMap {
       this.expeditions.push({ ...def, x: hexp.x, y: hexp.y, cooldownEnd: 0 });
     });
 
-    this._buildCollisionEdges();
     this._buildMinimap();
-  }
-
-  _buildCollisionEdges() {
-    this.collisionEdges = [];
-    this.edgeBuckets    = new Map();
-    const BUCKET  = TILE * 2;
-    const HALF    = HEX_R / 2;
-    const EVEN    = [[1,0],[-1,0],[0,-1],[-1,-1],[0,1],[-1,1]];
-    const ODD     = [[1,0],[-1,0],[1,-1],[0,-1],[1,1],[0,1]];
-    for (let r = 0; r < ROWS; r++) {
-      for (let c = 0; c < COLS; c++) {
-        if (this.isSolid(c, r)) continue;
-        const hc   = hexCenter(c, r);
-        const dirs = (r & 1) ? ODD : EVEN;
-        for (const [dc, dr] of dirs) {
-          if (!this.isSolid(c + dc, r + dr)) continue;
-          const hn = hexCenter(c + dc, r + dr);
-          const ex = hn.x - hc.x, ey = hn.y - hc.y;
-          const el = Math.hypot(ex, ey);
-          if (el < 0.1) continue;
-          const dx = ex / el, dy = ey / el;
-          const mx = (hc.x + hn.x) / 2, my = (hc.y + hn.y) / 2;
-          const seg = {
-            p1: { x: mx - dy * HALF, y: my + dx * HALF },
-            p2: { x: mx + dy * HALF, y: my - dx * HALF },
-            nx: -dx, ny: -dy, // outward normal pointing away from island
-          };
-          this.collisionEdges.push(seg);
-          const bkx = Math.floor(mx / BUCKET), bky = Math.floor(my / BUCKET);
-          const key = `${bkx},${bky}`;
-          let arr = this.edgeBuckets.get(key);
-          if (!arr) { arr = []; this.edgeBuckets.set(key, arr); }
-          arr.push(seg);
-        }
-      }
-    }
   }
 
   _buildMinimap() {

@@ -312,6 +312,10 @@ const Renderer = (() => {
     ctx.fillStyle = bldgMode.canPlace ? '#80ffaa' : '#ff8888';
     ctx.font = 'bold 11px monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
     ctx.fillText(parts.join('  '), ccx, ccy + HEX_PITCH_Y * def.size * 0.6 + 8);
+    if (bldgMode.depReason) {
+      ctx.fillStyle = '#ffaa44'; ctx.font = '10px monospace';
+      ctx.fillText(bldgMode.depReason, ccx, ccy + HEX_PITCH_Y * def.size * 0.6 + 22);
+    }
   }
 
   // ── Interact hint ──────────────────────────────────────
@@ -436,20 +440,25 @@ const Renderer = (() => {
           const def2 = SOLDIER_TYPES[uk];
           const unlocked = meta.unlockedUnits?.has(uk);
           const cost = RESEARCH_COST[tier];
-          const canRes = !unlocked && canAfford(player, cost);
+          const depCheck = canResearchDeps(uk, meta.buildingList || []);
+          const canRes = !unlocked && canAfford(player, cost) && depCheck.ok;
           const prereqOk = tier === 1 || meta.unlockedUnits?.has(line.units[1]);
-          const btnH = 22;
+          const btnH = depCheck.ok ? 22 : 30;
           ctx.fillStyle = unlocked ? '#0d2010' : canRes && prereqOk ? '#081828' : '#0a0c10';
           ctx.strokeStyle = unlocked ? '#30a840' : canRes && prereqOk ? '#2878b8' : '#1a2030';
           ctx.lineWidth = 1;
           _roundRect(px+pad, y, PW-pad*2, btnH, 4); ctx.fill(); ctx.stroke();
           ctx.fillStyle = unlocked ? '#40c860' : canRes && prereqOk ? '#50a0d0' : '#304050';
           ctx.font = 'bold 9px monospace'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-          ctx.fillText(unlocked ? `✓ ${def2?.name || uk}` : `⚗ ${def2?.name || uk}`, px+pad+5, y+btnH/2);
-          if (!unlocked && prereqOk) {
+          ctx.fillText(unlocked ? `✓ ${def2?.name || uk}` : `⚗ ${def2?.name || uk}`, px+pad+5, y+btnH/2 - (depCheck.ok ? 0 : 5));
+          if (!depCheck.ok && !unlocked) {
+            ctx.fillStyle = '#aa6622'; ctx.font = '8px monospace'; ctx.textBaseline = 'middle';
+            ctx.fillText(depCheck.missing, px+pad+5, y+btnH/2 + 7);
+          }
+          if (!unlocked && prereqOk && depCheck.ok) {
             const cStr = Object.entries(cost).filter(([,v])=>v>0)
               .map(([res,v])=>`${RES_DISPLAY[res].icon}${v}`).join(' ');
-            ctx.fillStyle = canRes ? '#88cc88' : '#cc5555';
+            ctx.fillStyle = canAfford(player, cost) ? '#88cc88' : '#cc5555';
             ctx.font = '8px monospace'; ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
             ctx.fillText(cStr, px+PW-pad-5, y+btnH/2);
             if (canRes) Input.TouchUI.hitAreas.push({ key: 'research_'+uk, x: px+pad, y, w: PW-pad*2, h: btnH });
@@ -2155,7 +2164,7 @@ const Renderer = (() => {
   };
 
   // ── Faction selection screen ───────────────────────────
-  function drawFactionSelect(state) {
+  function drawFactionSelect(state, hasSave) {
     // Background
     const bg = ctx.createLinearGradient(0, 0, 0, H);
     bg.addColorStop(0, '#020810'); bg.addColorStop(1, '#040f1c');
@@ -2167,6 +2176,18 @@ const Renderer = (() => {
     ctx.fillText('⚓  Choose Your Faction  ⚓', W/2, 30);
     ctx.fillStyle = '#3a6888'; ctx.font = '13px monospace';
     ctx.fillText('Press 1 / 2 / 3  or  tap a card', W/2, 72);
+
+    // Continue button (only when save exists)
+    if (hasSave) {
+      const bW = Math.min(220, W - 48), bH = 36;
+      const bx = (W - bW) / 2, by = H - 56;
+      ctx.fillStyle = '#0a1e38'; ctx.strokeStyle = '#2a70a8'; ctx.lineWidth = 1.5;
+      _roundRect(bx, by, bW, bH, 8); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#50a8d8'; ctx.font = 'bold 13px monospace';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('📂  Continue Saved Game', W/2, by + bH/2);
+      Input.TouchUI.hitAreas.push({ key: 'load_game', x: bx, y: by, w: bW, h: bH });
+    }
 
     const cardW = Math.min(230, (W - 80) / 3), cardH = Math.min(340, H - 160);
     const gap = Math.min(20, (W - cardW*3 - 40) / 2);
@@ -2215,6 +2236,43 @@ const Renderer = (() => {
     });
   }
 
+  // ── Pause menu overlay ────────────────────────────────
+  function drawPauseMenu(hasSave, justSaved) {
+    // Dim the play field
+    ctx.fillStyle = 'rgba(0,6,16,0.72)';
+    ctx.fillRect(0, 0, W, H);
+
+    const bW = Math.min(280, W - 48), bH = 48, gap = 12;
+    const items = [
+      { key: 'pause_resume', label: '▶  Resume',       color: '#40c8ff', bg: '#0e2a50', border: '#40c8ff' },
+      { key: 'pause_save',   label: justSaved ? '✓  Saved!' : '💾  Save Game', color: justSaved ? '#40e880' : '#c0d8ff', bg: '#0a1e38', border: '#3060a0' },
+      { key: 'pause_load',   label: '📂  Load Game',   color: hasSave  ? '#c0d8ff' : '#304050',   bg: '#0a1428', border: hasSave ? '#3060a0' : '#1a2840' },
+      { key: 'pause_menu',   label: '⊗  Main Menu',   color: '#6090a8', bg: '#080e18', border: '#1a3048' },
+    ];
+    const totalH = items.length * bH + (items.length - 1) * gap;
+    let y = (H - totalH) / 2 + 12;
+
+    // Panel title
+    ctx.fillStyle = '#d0eeff'; ctx.font = 'bold 22px monospace';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('— PAUSED —', W/2, y - 38);
+    ctx.fillStyle = '#2a5070'; ctx.font = '11px monospace';
+    ctx.fillText('[P] to resume', W/2, y - 16);
+
+    for (const item of items) {
+      const x = (W - bW) / 2;
+      ctx.fillStyle = item.bg;
+      ctx.strokeStyle = item.border; ctx.lineWidth = 1.5;
+      _roundRect(x, y, bW, bH, 8); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = item.color; ctx.font = 'bold 14px monospace';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(item.label, W/2, y + bH/2);
+      if (item.key !== 'pause_load' || hasSave)
+        Input.TouchUI.hitAreas.push({ key: item.key, x, y, w: bW, h: bH });
+      y += bH + gap;
+    }
+  }
+
   function _wrapText(text, cx2, y, maxW, lineH) {
     const words = text.split(' ');
     let line = '';
@@ -2243,7 +2301,7 @@ const Renderer = (() => {
     drawForts, drawProjectiles, drawTorpedoes, drawBuildGhost, drawCamps,
     drawEnemies, drawSoldiers, drawPlayer,
     drawHUD, drawMinimap, drawWaveFlash, drawGameOver, drawTouchControls,
-    drawFactionSelect,
+    drawFactionSelect, drawPauseMenu,
     get W() { return W; }, get H() { return H; },
   };
 })();

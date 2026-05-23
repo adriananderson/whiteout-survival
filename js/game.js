@@ -15,9 +15,126 @@ const Game = (() => {
     state = { phase: 'select', lastTime: performance.now() };
   }
 
+  function _hasSave() {
+    return !!localStorage.getItem('whiteout_save');
+  }
+
+  function _saveGame() {
+    const { player: p, map, soldiers, faction, unlockedUnits,
+            waveNumber, waveTimer, waveInterval, mapSeed } = state;
+    const save = {
+      version: 2,
+      savedAt: Date.now(),
+      seed: mapSeed,
+      faction,
+      unlockedUnits: [...(unlockedUnits ?? [])],
+      waveNumber, waveTimer, waveInterval,
+      player: {
+        x: p.x, y: p.y, angle: p.angle, hp: p.hp, kills: p.kills,
+        food: p.food, wood: p.wood, coal: p.coal, iron: p.iron,
+      },
+      soldiers: soldiers.map(s => ({ type: s.type, x: s.x, y: s.y, hp: s.hp })),
+      buildings: map.buildingList.map(b => ({
+        col: b.col, row: b.row, type: b.type, level: b.level,
+        hp: b.hp, maxHp: b.maxHp,
+        constructing: b.constructing, constructEnd: b.constructEnd,
+        constructDuration: b.constructDuration,
+        campCount: b.campCount ?? null, campMax: b.campMax ?? null,
+      })),
+      forts: Array.from(map.forts.values()).map(f => ({
+        col: f.col, row: f.row, type: f.type, hp: f.hp, maxHp: f.maxHp,
+      })),
+      camps: map.camps.map(c => ({ count: c.count, max: c.max, restoreTimer: c.restoreTimer ?? 0 })),
+      expeditions: map.expeditions.map(e => ({ id: e.id, cooldownEnd: e.cooldownEnd })),
+    };
+    localStorage.setItem('whiteout_save', JSON.stringify(save));
+    state.justSaved = Date.now();
+  }
+
+  function _loadGame() {
+    const raw = localStorage.getItem('whiteout_save');
+    if (!raw) return false;
+    let save;
+    try { save = JSON.parse(raw); } catch (_) { return false; }
+
+    const seed = save.seed ?? (Date.now() & 0xffffffff);
+    const map  = new GameMap();
+    map.generate(seed);
+
+    // Rebuild buildings entirely from save (replaces pre-placed ones)
+    map.buildingList.slice().forEach(b => map.removeBuilding(b));
+    (save.buildings ?? []).forEach(bs => {
+      const b = new Building(bs.col, bs.row, bs.type, bs.level);
+      b.hp = bs.hp; b.maxHp = bs.maxHp;
+      b.constructing = bs.constructing;
+      b.constructEnd = bs.constructEnd;
+      b.constructDuration = bs.constructDuration;
+      if (bs.campCount != null) {
+        b.campCount = bs.campCount; b.campMax = bs.campMax;
+        b.campRestoreTimer = 0; b.campRecruitTimer = 0;
+      }
+      map.placeBuilding(b);
+    });
+
+    map.forts.clear();
+    (save.forts ?? []).forEach(fs => {
+      const f = new Fortification(fs.col, fs.row, fs.type);
+      f.hp = fs.hp; f.maxHp = fs.maxHp;
+      map.placeFort(f);
+    });
+
+    (save.camps ?? []).forEach((cc, i) => {
+      if (map.camps[i]) {
+        map.camps[i].count = cc.count; map.camps[i].max = cc.max;
+        map.camps[i].restoreTimer = cc.restoreTimer ?? 0;
+      }
+    });
+
+    (save.expeditions ?? []).forEach(se => {
+      const exp = map.expeditions.find(e => e.id === se.id);
+      if (exp) exp.cooldownEnd = se.cooldownEnd;
+    });
+
+    const sp     = save.player;
+    const player = new Player(sp.x, sp.y);
+    player.angle = sp.angle ?? 0;
+    player.hp    = sp.hp;   player.kills = sp.kills ?? 0;
+    player.food  = sp.food; player.wood  = sp.wood;
+    player.coal  = sp.coal; player.iron  = sp.iron;
+
+    const soldiers = (save.soldiers ?? []).map(ss => {
+      const s = new Soldier(ss.x, ss.y, ss.type);
+      s.hp = ss.hp; return s;
+    });
+
+    state = {
+      phase: 'play', faction: save.faction, mapSeed: seed,
+      unlockedUnits: new Set(save.unlockedUnits ?? []),
+      map, player, soldiers, enemies: [],
+      camera: { x: sp.x, y: sp.y },
+      waveNumber: save.waveNumber ?? 0,
+      waveTimer:  save.waveTimer  ?? 0,
+      waveInterval: save.waveInterval ?? WAVE_INTERVAL,
+      waveFlash: 0,
+      buildMode:    { active: false, type: 'wall', canPlace: false, ghostCol: -1, ghostRow: -1 },
+      bldgMode:     { active: false, type: null,  canPlace: false, ghostCol: -1, ghostRow: -1 },
+      bldgSelector: { open: false },
+      openPanel: null, openExpedition: null,
+      nearBuilding: null, nearExpedition: null,
+      prodTimer: 0, gameOver: false, waveCheckpoint: null,
+      torpedoes: [], sonarPulse: null,
+      paused: false, justSaved: 0,
+      lastTime: performance.now(),
+    };
+    Audio.startAmbient();
+    return true;
+  }
+
   function _startGame(faction) {
+    Audio.startAmbient();
+    const seed = Date.now() & 0xffffffff;
     const map = new GameMap();
-    map.generate(Date.now() & 0xffffffff);
+    map.generate(seed);
 
     // Player spawns near Chief's Hall (harbour waterline)
     const mc = Math.floor(COLS/2), mr = Math.floor(ROWS/2) + 2;
@@ -28,7 +145,7 @@ const Game = (() => {
 
     state = {
       phase: 'play',
-      faction,
+      faction, mapSeed: seed,
       unlockedUnits,
       map,
       player:       new Player(spawn.x, spawn.y),
@@ -51,6 +168,8 @@ const Game = (() => {
       waveCheckpoint:  null,
       torpedoes:       [],
       sonarPulse:      null,
+      paused:          false,
+      justSaved:       0,
       lastTime:        performance.now(),
     };
   }
@@ -60,6 +179,7 @@ const Game = (() => {
       if (Input.wasPressed(String(i + 1))) _startGame(f);
       if (Input.wasPressed('faction_' + f)) _startGame(f);
     });
+    if (Input.wasPressed('load_game') && _hasSave()) _loadGame();
   }
 
   function getHallLevel() {
@@ -81,7 +201,16 @@ const Game = (() => {
       return;
     }
 
-    if (!state.gameOver) {
+    if (state.phase === 'play' && !state.gameOver && Input.wasPressed('p')) {
+      state.paused = !state.paused;
+    }
+
+    if (state.paused) {
+      if (Input.wasPressed('pause_resume')) state.paused = false;
+      if (Input.wasPressed('pause_save'))   _saveGame();
+      if (Input.wasPressed('pause_load') && _hasSave()) _loadGame();
+      if (Input.wasPressed('pause_menu'))   newGame();
+    } else if (!state.gameOver) {
       update(dt);
     } else {
       if (Input.wasPressed('r')) {
@@ -99,6 +228,7 @@ const Game = (() => {
   function update(dt) {
     const { map, player, soldiers, enemies, camera } = state;
     _resetAstarBudget();
+    Audio.tick(dt);
 
     // ── Player movement ───────────────────────────────
     player.update(dt, map);
@@ -156,6 +286,7 @@ const Game = (() => {
         state.openExpedition = state.nearExpedition;
       } else if (state.nearBuilding) {
         state.openPanel = state.nearBuilding;
+        Audio.uiOpen();
       }
     }
 
@@ -168,7 +299,8 @@ const Game = (() => {
           if (Input.wasPressed('research_' + unitKey)) {
             if (!state.unlockedUnits.has(unitKey)) {
               const cost = RESEARCH_COST[tier];
-              if (canAfford(state.player, cost)) {
+              const rdep = canResearchDeps(unitKey, map.buildingList);
+              if (canAfford(state.player, cost) && rdep.ok) {
                 for (const [res, amt] of Object.entries(cost)) state.player[res] -= amt;
                 state.unlockedUnits.add(unitKey);
                 if (tier === 2) state.unlockedUnits.add(line.units[1]);
@@ -224,17 +356,18 @@ const Game = (() => {
       state.bldgMode.ghostRow = gr;
 
       const cost = getBldgUpgradeCost(def, 1);
+      const _depCheck = canBuildDeps(state.bldgMode.type, map.buildingList);
+      state.bldgMode.depReason  = _depCheck.ok ? null : _depCheck.missing;
       state.bldgMode.canPlace =
-        map.canPlaceBuilding(gc, gr, def.size) && canAfford(player, cost);
+        map.canPlaceBuilding(gc, gr, def.size) && canAfford(player, cost) && _depCheck.ok;
 
       if (Input.consumeLeftUp()) {
         if (state.bldgMode.canPlace) {
           const b = new Building(gc, gr, state.bldgMode.type, 0);
           map.placeBuilding(b);
-          // Immediately start construction to level 1
           b.upgrade(player, getHallLevel());
-          // Open its panel so player sees the progress
           state.openPanel = b;
+          Audio.place();
         }
       }
       if (Input.consumeRightUp()) {
@@ -262,6 +395,7 @@ const Game = (() => {
       if (Input.consumeLeftUp() && state.buildMode.canPlace) {
         player.wood -= def.cost.wood; player.iron -= def.cost.iron;
         map.placeFort(new Fortification(gc, gr, state.buildMode.type));
+        Audio.place();
       }
       if (Input.consumeRightUp()) state.buildMode.active = false;
     }
@@ -310,15 +444,12 @@ const Game = (() => {
     // ── Soldier recruitment ───────────────────────────
     const CAMP_RESTORE_TIME = 20; // seconds per slot restored
     map.camps.forEach(camp => {
-      // Restore slots over time
       if (camp.count < camp.max) {
         camp.restoreTimer += dt;
         if (camp.restoreTimer >= CAMP_RESTORE_TIME) {
           camp.restoreTimer = 0; camp.count++;
         }
       } else { camp.restoreTimer = 0; }
-
-      // Recruit when player is nearby, slots available, and under soldier cap
       if (camp.count <= 0 || soldiers.length >= 30) return;
       const d = Math.hypot(player.x - camp.x, player.y - camp.y);
       if (d < CAMP_R) {
@@ -332,6 +463,34 @@ const Game = (() => {
         }
       } else { camp.recruitTimer = 0; }
     });
+
+    // ── Recruit from player-built Recruit Stations ────
+    for (const b of map.buildingList) {
+      if (b.type !== 'recruit_post' || b.level < 1 || b.constructing || b.hp <= 0) continue;
+      if (b.campCount == null) {
+        b.campMax = 6 + b.level * 4;
+        b.campCount = b.campMax;
+        b.campRestoreTimer = 0;
+        b.campRecruitTimer = 0;
+      }
+      const restoreTime = Math.max(8, 20 - b.level * 2);
+      if (b.campCount < b.campMax) {
+        b.campRestoreTimer += dt;
+        if (b.campRestoreTimer >= restoreTime) { b.campRestoreTimer = 0; b.campCount++; }
+      } else { b.campRestoreTimer = 0; }
+      if (b.campCount <= 0 || soldiers.length >= 30) continue;
+      const bd = Math.hypot(player.x - b.x, player.y - b.y);
+      if (bd < CAMP_R) {
+        b.campRecruitTimer += dt;
+        if (b.campRecruitTimer >= 0.35) {
+          b.campRecruitTimer = 0; b.campCount--;
+          const rpool = state.unlockedUnits ? [...state.unlockedUnits] : SOLDIER_TYPE_KEYS;
+          const t = rpool[Math.floor(Math.random()*rpool.length)];
+          const sp = _findSpawnNear(b.x, b.y, SOLDIER_TYPES[t].r, map);
+          soldiers.push(new Soldier(sp.x, sp.y, t));
+        }
+      } else { b.campRecruitTimer = 0; }
+    }
 
     // ── Soldiers update + separation ─────────────────
     for (const s of soldiers) s.update(dt, player, enemies, map);
@@ -351,10 +510,12 @@ const Game = (() => {
     }
     for (let i=soldiers.length-1; i>=0; i--) { if(soldiers[i].hp<=0) soldiers.splice(i,1); }
 
-    // ── Buildings: check completions + production tick
+    // ── Buildings: check completions + production tick + passive heal
     for (const b of map.buildingList) {
       b.hitFlash = Math.max(0, b.hitFlash - dt);
       b.checkComplete();
+      if (!b.constructing && b.hp > 0 && b.hp < b.maxHp && b.hitFlash <= 0)
+        b.hp = Math.min(b.maxHp, b.hp + BLDG_HEAL_RATE * dt);
     }
     state.prodTimer += dt;
     if (state.prodTimer >= PROD_TICK) {
@@ -371,6 +532,8 @@ const Game = (() => {
     // ── Forts update ──────────────────────────────────
     map.forts.forEach((f, key) => {
       f.update(dt, enemies);
+      if (!f.dead && f.hp > 0 && f.hp < f.maxHp && f.hitFlash <= 0)
+        f.hp = Math.min(f.maxHp, f.hp + BLDG_HEAL_RATE * dt);
       if (f.dead) map.forts.delete(key);
     });
 
@@ -460,10 +623,10 @@ const Game = (() => {
 
   function _pickEnemyType(waveIdx) {
     const pool = ['mermaid'];
-    if (waveIdx >= 2) { pool.push('shark'); pool.push('shark'); }
-    if (waveIdx >= 4) pool.push('swordfish');
-    if (waveIdx >= 6) pool.push('anglerfish');
-    if (waveIdx >= 9) pool.push('jellyfish');
+    if (waveIdx >= 3)  { pool.push('shark'); pool.push('shark'); }
+    if (waveIdx >= 6)  pool.push('swordfish');
+    if (waveIdx >= 10) pool.push('anglerfish');
+    if (waveIdx >= 14) pool.push('jellyfish');
     return pool[Math.floor(Math.random() * pool.length)];
   }
 
@@ -537,6 +700,7 @@ const Game = (() => {
 
   function _spawnWave(waveIdx) {
     _saveCheckpoint();
+    Audio.waveWarn();
     const count = WAVE_BASE + waveIdx * WAVE_GROWTH;
     for (let i=0; i<count; i++) {
       const edge = Math.floor(Math.random()*4);
@@ -562,7 +726,7 @@ const Game = (() => {
     Input.TouchUI.hitAreas.length = 0;  // rebuild touch targets each frame
 
     if (state.phase === 'select') {
-      Renderer.drawFactionSelect(state);
+      Renderer.drawFactionSelect(state, _hasSave());
       return;
     }
 
@@ -576,7 +740,13 @@ const Game = (() => {
 
     Renderer.drawMap(map, camera);
     Renderer.drawBuildings(map, camera);
-    Renderer.drawCamps(map.camps, camera);
+    const _allCamps = [
+      ...map.camps,
+      ...map.buildingList
+        .filter(b => b.type === 'recruit_post' && b.level >= 1 && !b.constructing && b.hp > 0)
+        .map(b => ({ x: b.x, y: b.y, count: b.campCount ?? 0, max: b.campMax ?? (6 + b.level * 4), restoreTimer: b.campRestoreTimer ?? 0 })),
+    ];
+    Renderer.drawCamps(_allCamps, camera);
     Renderer.drawExpeditions(map.expeditions, camera);
     Renderer.drawForts(map, camera);
     Renderer.drawProjectiles(map, camera);
@@ -601,11 +771,13 @@ const Game = (() => {
 
     // Panels (drawn last, on top)
     if (state.bldgSelector.open)  Renderer.drawBldgSelector(state.bldgMode, player);
-    if (state.openPanel)          Renderer.drawBuildingPanel(state.openPanel, player, getHallLevel(), { faction: state.faction, unlockedUnits: state.unlockedUnits });
+    if (state.openPanel)          Renderer.drawBuildingPanel(state.openPanel, player, getHallLevel(), { faction: state.faction, unlockedUnits: state.unlockedUnits, buildingList: map.buildingList });
     if (state.openExpedition)     Renderer.drawExpeditionPanel(state.openExpedition, player);
 
     // Touch overlay (drawn on top of everything; also registers action button hit areas)
     Renderer.drawTouchControls(state);
+
+    if (state.paused) Renderer.drawPauseMenu(_hasSave(), Date.now() - (state.justSaved || 0) < 2000);
   }
 
   window.addEventListener('DOMContentLoaded', init);

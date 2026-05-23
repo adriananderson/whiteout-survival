@@ -86,6 +86,7 @@ class Soldier {
     this.moving      = false;
     this._stuckTimer = 0;
     this._pathWP     = null;
+    this._wanderA    = (Math.random() - 0.5) * 1.5;
     const a = Math.random() * Math.PI * 2;
     const d = 28 + Math.random() * 55;
     this.ox = Math.cos(a) * d;
@@ -114,7 +115,7 @@ class Soldier {
       return true;
     });
 
-    // Find nearest enemy in range
+    // Find nearest enemy in attack range
     let nearest = null, nearDist = this.range;
     for (const e of enemies) {
       if (e.dead) continue;
@@ -122,9 +123,45 @@ class Soldier {
       if (d < nearDist) { nearDist = d; nearest = e; }
     }
 
-    // Direct target (enemy or player-follow offset)
-    const dTX = nearest ? nearest.x : player.x + this.ox;
-    const dTY = nearest ? nearest.y : player.y + this.oy;
+    // Movement target priority:
+    //   1. Enemy in attack range (fight it)
+    //   2. Any enemy on the map, weighted toward ones threatening buildings/forts
+    //   3. Guard nearest building (spread around it via personal offset)
+    //   4. Follow player sub as last resort
+    let dTX, dTY;
+    if (nearest) {
+      dTX = nearest.x; dTY = nearest.y;
+    } else {
+      let bestE = null, bestScore = Infinity;
+      for (const e of enemies) {
+        if (e.dead) continue;
+        let score = Math.hypot(e.x-this.x, e.y-this.y);
+        if (map) {
+          for (const b of map.buildingList) {
+            if (b.hp > 0 && Math.hypot(e.x-b.x, e.y-b.y) < TILE * 5) { score *= 0.35; break; }
+          }
+          map.forts.forEach(f => {
+            if (f.hp > 0 && Math.hypot(e.x-f.x, e.y-f.y) < TILE * 4) score *= 0.5;
+          });
+        }
+        if (score < bestScore) { bestScore = score; bestE = e; }
+      }
+      if (bestE) {
+        dTX = bestE.x; dTY = bestE.y;
+      } else if (map?.buildingList?.length > 0) {
+        let nearB = null, nearBDist = Infinity;
+        for (const b of map.buildingList) {
+          if (b.hp <= 0) continue;
+          const d = Math.hypot(b.x-this.x, b.y-this.y);
+          if (d < nearBDist) { nearBDist = d; nearB = b; }
+        }
+        dTX = nearB ? nearB.x + this.ox * 0.45 : player.x + this.ox;
+        dTY = nearB ? nearB.y + this.oy * 0.45 : player.y + this.oy;
+      } else {
+        dTX = player.x + this.ox;
+        dTY = player.y + this.oy;
+      }
+    }
 
     // Advance toward A* waypoint if active; clear when reached
     if (this._pathWP && Math.hypot(this._pathWP.x - this.x, this._pathWP.y - this.y) < TILE * 0.6)
@@ -150,19 +187,26 @@ class Soldier {
           this.attackTimer = 0;
           if (this.ranged) {
             this.projectiles.push({ x: this.x, y: this.y, tx: nearest.x, ty: nearest.y, target: nearest, dmg: this.dmg });
+            if (typeof Audio !== 'undefined') Audio.rangedFire();
           } else {
             nearest.hp -= this.dmg; nearest.hitFlash = 0.12;
             if (nearest.hp <= 0) nearest.dead = true;
+            if (typeof Audio !== 'undefined') Audio.meleeHit();
           }
         }
       }
     } else {
       this.state = 'follow'; this.target = null; this.attackTimer = 0;
+      // Drift wander angle; decay slowly back toward 0 so they don't orbit forever
+      this._wanderA += (Math.random() - 0.5) * 3.5 * dt;
+      this._wanderA  = Math.max(-1.2, Math.min(1.2, this._wanderA));
+      this._wanderA -= this._wanderA * 0.25 * dt;
       const dx = nTX - this.x, dy = nTY - this.y;
       const d = Math.hypot(dx, dy);
       if (d > 6) {
-        this.angle = Math.atan2(dy, dx);
-        _moveWithSteering(this, dx/d, dy/d, Math.min(this.speed, d * 3.5), dt, map);
+        const wa = Math.atan2(dy, dx) + this._wanderA;
+        this.angle = wa;
+        _moveWithSteering(this, Math.cos(wa), Math.sin(wa), Math.min(this.speed, d * 3.5), dt, map);
       }
     }
 
@@ -210,6 +254,7 @@ class Enemy {
 
   update(dt, player, soldiers, map) {
     if (this.dead) return;
+    if (map) _escapeIfStuck(this, map);
     this.hitFlash = Math.max(0, this.hitFlash - dt);
 
     // Advance projectiles (ranged enemies)
@@ -267,11 +312,16 @@ class Enemy {
         this.attackTimer = 0;
         if (this.ranged) {
           this.projectiles.push({ x: this.x, y: this.y, tx: tRef.x, ty: tRef.y, target: tRef, dmg: this.dmg });
+          if (typeof Audio !== 'undefined') Audio.enemyFire();
         } else {
           if (tRef === player) {
             player.hp -= this.dmg; player.lastHitTimer = 3;
+            if (typeof Audio !== 'undefined') Audio.enemyMelee();
           } else {
             tRef.hp -= this.dmg; tRef.hitFlash = 0.15;
+            if (typeof Audio !== 'undefined') {
+              if (tRef.col != null) Audio.structureHit(); else Audio.enemyMelee();
+            }
           }
         }
       }
@@ -310,7 +360,11 @@ class Fortification {
           const d = Math.hypot(e.x-this.x, e.y-this.y);
           if (d < nd) { nd = d; nearest = e; }
         }
-        if (nearest) { this.projectiles.push({ x:this.x, y:this.y, target:nearest, dmg:this.dmg }); this.fireTimer = 0; }
+        if (nearest) {
+          this.projectiles.push({ x:this.x, y:this.y, target:nearest, dmg:this.dmg });
+          this.fireTimer = 0;
+          if (typeof Audio !== 'undefined') Audio.rangedFire();
+        }
       }
     }
     this.projectiles = this.projectiles.filter(p => {
@@ -499,26 +553,38 @@ function _blockedByBuilding(x, y, r, map) {
 }
 
 function _pushOutOfIslands(x, y, r, map) {
-  if (!map.edgeBuckets) return { x, y };
-  const BUCKET = TILE * 2;
-  const bkx = Math.floor(x / BUCKET), bky = Math.floor(y / BUCKET);
-  for (let dbx = -1; dbx <= 1; dbx++) {
-    for (let dby = -1; dby <= 1; dby++) {
-      const segs = map.edgeBuckets.get(`${bkx+dbx},${bky+dby}`);
-      if (!segs) continue;
-      for (const seg of segs) {
-        const ax = seg.p1.x, ay = seg.p1.y;
-        const sdx = seg.p2.x - ax, sdy = seg.p2.y - ay;
+  const HALF = HEX_R / 2;
+  const EVEN = [[1,0],[-1,0],[0,-1],[-1,-1],[0,1],[-1,1]];
+  const ODD  = [[1,0],[-1,0],[1,-1],[0,-1],[1,1],[0,1]];
+  const { c: ec, r: er } = pixelToHex(x, y);
+  for (let dc = -2; dc <= 2; dc++) {
+    for (let dr = -2; dr <= 2; dr++) {
+      const oc = ec + dc, or_ = er + dr;
+      if (map.isSolid(oc, or_)) continue;
+      const dirs = (or_ & 1) ? ODD : EVEN;
+      for (const [ndc, ndr] of dirs) {
+        const sc = oc + ndc, sr = or_ + ndr;
+        if (!map.isSolid(sc, sr)) continue;
+        // boundary segment between open (oc,or_) and solid (sc,sr)
+        const hc = hexCenter(oc, or_), hn = hexCenter(sc, sr);
+        const ex = hn.x - hc.x, ey = hn.y - hc.y;
+        const el = Math.hypot(ex, ey);
+        if (el < 0.1) continue;
+        const dx = ex/el, dy = ey/el;
+        const mx = (hc.x + hn.x)/2, my = (hc.y + hn.y)/2;
+        const ax = mx - dy*HALF, ay = my + dx*HALF;
+        const bx = mx + dy*HALF, by = my - dx*HALF;
+        const sdx = bx-ax, sdy = by-ay;
         const lenSq = sdx*sdx + sdy*sdy;
         if (lenSq < 0.001) continue;
-        let t = ((x - ax)*sdx + (y - ay)*sdy) / lenSq;
+        let t = ((x-ax)*sdx + (y-ay)*sdy) / lenSq;
         t = t < 0 ? 0 : t > 1 ? 1 : t;
         const cpx = ax + t*sdx, cpy = ay + t*sdy;
-        const ex = x - cpx, ey = y - cpy;
-        const dist = Math.hypot(ex, ey);
-        if (dist < r) {
-          if (dist > 0.001) { const push = (r - dist) / dist; x += ex * push; y += ey * push; }
-          else { x += seg.nx * r; y += seg.ny * r; } // exactly on segment — use stored normal
+        const edx = x-cpx, edy = y-cpy;
+        const d = Math.hypot(edx, edy);
+        if (d < r) {
+          if (d > 0.001) { x += edx*(r-d)/d; y += edy*(r-d)/d; }
+          else           { x -= dx*r; y -= dy*r; }
         }
       }
     }
@@ -555,8 +621,10 @@ function collidesMap(x, y, r, map) {
 }
 
 function _canMoveEnemy(x, y, r, map) {
+  const h = pixelToHex(x, y);
+  if (map.isSolid(h.c, h.r)) return false;
   const cr = r - 1;
-  const check = (cx, cy) => { const h = pixelToHex(cx, cy); return map.isSolid(h.c, h.r) || map.hasBuilding(h.c, h.r); };
+  const check = (cx, cy) => { const t = pixelToHex(cx, cy); return map.isSolid(t.c, t.r) || map.hasBuilding(t.c, t.r); };
   return !check(x-cr,y-cr) && !check(x+cr,y-cr) && !check(x-cr,y+cr) && !check(x+cr,y+cr);
 }
 
@@ -573,15 +641,15 @@ function _findSpawnNear(cx, cy, r, map) {
   return { x: cx, y: cy };
 }
 
-// Teleports entity to the nearest valid position if it's currently inside a solid tile.
+// Teleports entity to the nearest valid position if stuck in land or a building.
 function _escapeIfStuck(entity, map) {
-  if (!_blockedByBuilding(entity.x, entity.y, entity.r, map)) return;
+  if (_canMoveEnemy(entity.x, entity.y, entity.r, map)) return;
   for (let dist = TILE * 0.5; dist <= TILE * 6; dist += TILE * 0.5) {
     const steps = Math.max(8, Math.round((Math.PI * 2 * dist) / (TILE * 0.5)));
     for (let i = 0; i < steps; i++) {
       const a = (i / steps) * Math.PI * 2;
       const tx = entity.x + Math.cos(a) * dist, ty = entity.y + Math.sin(a) * dist;
-      if (!_blockedByBuilding(tx, ty, entity.r, map)) { entity.x = tx; entity.y = ty; return; }
+      if (_canMoveEnemy(tx, ty, entity.r, map)) { entity.x = tx; entity.y = ty; return; }
     }
   }
 }
