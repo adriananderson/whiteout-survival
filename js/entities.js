@@ -84,9 +84,11 @@ class Soldier {
     this.projectiles = [];
     this.animT       = 0;
     this.moving      = false;
-    this._stuckTimer = 0;
-    this._pathWP     = null;
-    this._wanderA    = (Math.random() - 0.5) * 1.5;
+    this._stuckTimer  = 0;
+    this._pathWP      = null;
+    this._wanderA     = (Math.random() - 0.5) * 1.5;
+    this._patrolTarget = null;
+    this._patrolTimer  = 0;
     const a = Math.random() * Math.PI * 2;
     const d = 28 + Math.random() * 55;
     this.ox = Math.cos(a) * d;
@@ -95,7 +97,7 @@ class Soldier {
 
   update(dt, player, enemies, map) {
     this.hitFlash = Math.max(0, this.hitFlash - dt);
-    if (map) _escapeIfStuck(this, map);
+    if (map) _escapeIfStuck(this, map, true);
     this.animT += dt;
 
     // Advance projectiles
@@ -115,18 +117,33 @@ class Soldier {
       return true;
     });
 
-    // Find nearest enemy in attack range
+    // Only consider enemies within 20 tiles of any building, fort, soldier, or the player
+    const THREAT_R = TILE * 20;
+    const _enemyInRange = (e) => {
+      if (Math.hypot(e.x - player.x, e.y - player.y) < THREAT_R) return true;
+      if (map) {
+        for (const b of map.buildingList) {
+          if (b.hp > 0 && Math.hypot(e.x - b.x, e.y - b.y) < THREAT_R) return true;
+        }
+        for (const f of map.forts.values()) {
+          if (f.hp > 0 && Math.hypot(e.x - f.x, e.y - f.y) < THREAT_R) return true;
+        }
+      }
+      return false;
+    };
+
+    // Find nearest enemy in attack range (only threats)
     let nearest = null, nearDist = this.range;
     for (const e of enemies) {
-      if (e.dead) continue;
+      if (e.dead || !_enemyInRange(e)) continue;
       const d = Math.hypot(e.x-this.x, e.y-this.y);
       if (d < nearDist) { nearDist = d; nearest = e; }
     }
 
     // Movement target priority:
     //   1. Enemy in attack range (fight it)
-    //   2. Any enemy on the map, weighted toward ones threatening buildings/forts
-    //   3. Guard nearest building (spread around it via personal offset)
+    //   2. Nearby threatening enemy, weighted toward ones near buildings/forts
+    //   3. Patrol between random buildings
     //   4. Follow player sub as last resort
     let dTX, dTY;
     if (nearest) {
@@ -134,7 +151,7 @@ class Soldier {
     } else {
       let bestE = null, bestScore = Infinity;
       for (const e of enemies) {
-        if (e.dead) continue;
+        if (e.dead || !_enemyInRange(e)) continue;
         let score = Math.hypot(e.x-this.x, e.y-this.y);
         if (map) {
           for (const b of map.buildingList) {
@@ -148,18 +165,24 @@ class Soldier {
       }
       if (bestE) {
         dTX = bestE.x; dTY = bestE.y;
-      } else if (map?.buildingList?.length > 0) {
-        let nearB = null, nearBDist = Infinity;
-        for (const b of map.buildingList) {
-          if (b.hp <= 0) continue;
-          const d = Math.hypot(b.x-this.x, b.y-this.y);
-          if (d < nearBDist) { nearBDist = d; nearB = b; }
-        }
-        dTX = nearB ? nearB.x + this.ox * 0.45 : player.x + this.ox;
-        dTY = nearB ? nearB.y + this.oy * 0.45 : player.y + this.oy;
       } else {
-        dTX = player.x + this.ox;
-        dTY = player.y + this.oy;
+        // Patrol: pick a random non-recruit_post building; refresh when reached or timer expires
+        const patrolBuildings = map ? map.buildingList.filter(b => b.hp > 0 && b.type !== 'recruit_post') : [];
+        this._patrolTimer -= dt;
+        const atTarget = this._patrolTarget &&
+          Math.hypot(this.x - this._patrolTarget.x, this.y - this._patrolTarget.y) < TILE * 2;
+        if (patrolBuildings.length > 0 && (atTarget || this._patrolTimer <= 0 || !this._patrolTarget || this._patrolTarget.hp <= 0)) {
+          const candidates = patrolBuildings.filter(b => b !== this._patrolTarget);
+          this._patrolTarget = (candidates.length > 0 ? candidates : patrolBuildings)[Math.floor(Math.random() * (candidates.length || patrolBuildings.length))];
+          this._patrolTimer  = 6 + Math.random() * 8;
+        }
+        if (this._patrolTarget) {
+          dTX = this._patrolTarget.x + this.ox * 0.45;
+          dTY = this._patrolTarget.y + this.oy * 0.45;
+        } else {
+          dTX = player.x + this.ox;
+          dTY = player.y + this.oy;
+        }
       }
     }
 
@@ -524,7 +547,8 @@ function _findPath(fromX, fromY, toX, toY, map) {
     for (const [dc, dr] of (cur.r & 1 ? ODD : EVEN)) {
       const nc = cur.c + dc, nr = cur.r + dr;
       if (nc < 0 || nc >= COLS || nr < 0 || nr >= ROWS) continue;
-      if (map.isSolid(nc, nr) || map.hasBuilding(nc, nr)) continue;
+      if (map.isSolid(nc, nr)) continue;
+      if (map.hasBuilding(nc, nr)) { const b = map.getBuildingAt(nc, nr); if (b?.type !== 'recruit_post') continue; }
       const ni = idx(nc, nr);
       const ng = cur.g + 1;
       if (ng < (gScore.get(ni) ?? Infinity)) {
@@ -647,6 +671,20 @@ function _canMoveFriendly(x, y, r, map) {
   return !check(x-cr,y-cr) && !check(x+cr,y-cr) && !check(x-cr,y+cr) && !check(x+cr,y+cr);
 }
 
+function _spawnClearance(x, y, map) {
+  // Require that at least 3 of the 4 cardinal neighbours one tile away are also passable,
+  // so the soldier isn't immediately boxed in against a wall.
+  const probes = [
+    [x + TILE, y], [x - TILE, y], [x, y + TILE], [x, y - TILE],
+  ];
+  let open = 0;
+  for (const [px, py] of probes) {
+    const h = pixelToHex(px, py);
+    if (!map.isSolid(h.c, h.r)) open++;
+  }
+  return open >= 3;
+}
+
 function _findSpawnNear(cx, cy, r, map) {
   // Spiral outward in rings so we always find the nearest valid tile
   for (let dist = 0; dist <= TILE * 6; dist += TILE * 0.5) {
@@ -654,21 +692,24 @@ function _findSpawnNear(cx, cy, r, map) {
     for (let i = 0; i < steps; i++) {
       const a = (i / steps) * Math.PI * 2;
       const tx = cx + Math.cos(a) * dist, ty = cy + Math.sin(a) * dist;
-      if (_canMoveFriendly(tx, ty, r, map)) return { x: tx, y: ty };
+      if (_canMoveFriendly(tx, ty, r, map) && _spawnClearance(tx, ty, map)) return { x: tx, y: ty };
     }
   }
   return { x: cx, y: cy };
 }
 
 // Teleports entity to the nearest valid position if stuck in land or a building.
-function _escapeIfStuck(entity, map) {
-  if (_canMoveEnemy(entity.x, entity.y, entity.r, map)) return;
+function _escapeIfStuck(entity, map, friendly = false) {
+  const canMove = friendly ? _canMoveFriendly : _canMoveEnemy;
+  if (canMove(entity.x, entity.y, entity.r, map)) return;
   for (let dist = TILE * 0.5; dist <= TILE * 6; dist += TILE * 0.5) {
     const steps = Math.max(8, Math.round((Math.PI * 2 * dist) / (TILE * 0.5)));
     for (let i = 0; i < steps; i++) {
       const a = (i / steps) * Math.PI * 2;
       const tx = entity.x + Math.cos(a) * dist, ty = entity.y + Math.sin(a) * dist;
-      if (_canMoveEnemy(tx, ty, entity.r, map)) { entity.x = tx; entity.y = ty; return; }
+      if (canMove(tx, ty, entity.r, map) && _spawnClearance(tx, ty, map)) {
+        entity.x = tx; entity.y = ty; return;
+      }
     }
   }
 }
