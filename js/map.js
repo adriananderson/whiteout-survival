@@ -137,12 +137,12 @@ class GameMap {
     const furn = new Building(furnCol, furnRow, 'furnace', 1);
     this.placeBuilding(furn);
 
-    // Pre-place Recruit Station west of the hall
+    // Pre-place Training Pool west of the hall
     const rpCol = hallCol - 4, rpRow = hallRow + 2;
     for (let dc = -1; dc <= 2; dc++)
       for (let dr = -1; dr <= 2; dr++)
         this.set(rpCol+dc, rpRow+dr, T_SAND);
-    const rp = new Building(rpCol, rpRow, 'recruit_post', 1);
+    const rp = new Building(rpCol, rpRow, 'barracks', 1);
     this.placeBuilding(rp);
 
     // Expedition sites

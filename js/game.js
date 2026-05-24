@@ -464,9 +464,9 @@ const Game = (() => {
       } else { camp.recruitTimer = 0; }
     });
 
-    // ── Recruit from player-built Recruit Stations ────
+    // ── Recruit from Training Pools ───────────────────
     for (const b of map.buildingList) {
-      if (b.type !== 'recruit_post' || b.level < 1 || b.constructing || b.hp <= 0) continue;
+      if (b.type !== 'barracks' || b.level < 1 || b.constructing || b.hp <= 0) continue;
       if (b.campCount == null) {
         b.campMax = 6 + b.level * 4;
         b.campCount = b.campMax;
@@ -743,7 +743,7 @@ const Game = (() => {
     const _allCamps = [
       ...map.camps,
       ...map.buildingList
-        .filter(b => b.type === 'recruit_post' && b.level >= 1 && !b.constructing && b.hp > 0)
+        .filter(b => b.type === 'barracks' && b.level >= 1 && !b.constructing && b.hp > 0)
         .map(b => ({ x: b.x, y: b.y, count: b.campCount ?? 0, max: b.campMax ?? (6 + b.level * 4), restoreTimer: b.campRestoreTimer ?? 0 })),
     ];
     Renderer.drawCamps(_allCamps, camera);

@@ -297,11 +297,11 @@ const BLDG_DEFS = {
   },
   barracks: {
     name: 'Training Pool', icon: '🐬', size: 2, maxLevel: 10,
-    desc: 'Trains marine creatures for combat duty.',
+    desc: 'Trains marine creatures for combat duty. Stand nearby to enlist crew.',
     baseCost: { food: 100, wood: 150, coal: 0, iron: 50 },
     costScale: 1.6, baseBuildTime: 30, timeScale: 1.6,
     hp: 350, color: '#186888', hi: '#2888b0', lo: '#083848',
-    bonus: l => `Crew HP +${l*10} · ATK +${l}`,
+    bonus: l => `Crew HP +${l*10} · ATK +${l} · Slots: ${6 + l * 4}`,
     produces: null, militaryBonus: true,
   },
   hospital: {
@@ -349,22 +349,12 @@ const BLDG_DEFS = {
     bonus: l => `+${l} rations/s · Hero slots: ${Math.ceil(l/3)}`,
     produces: { resource: 'food', rate: 1 },
   },
-  recruit_post: {
-    name: 'Recruit Station', icon: '🎣', size: 2, maxLevel: 5,
-    desc: 'Stand nearby to enlist crew. Higher levels add slots and faster refill.',
-    baseCost: { food: 60, wood: 80, coal: 0, iron: 0 },
-    costScale: 1.4, baseBuildTime: 12, timeScale: 1.35,
-    hp: 180, color: '#2a6048', hi: '#3a9068', lo: '#103828',
-    bonus: l => `Crew slots: ${6 + l * 4} · Refill: ${Math.max(8, 20 - l * 2)}s`,
-    produces: null,
-  },
 };
 
 const BLDG_KEYS = [
   'chief_hall', 'furnace',      'farm',         'sawmill',
   'coal_mine',  'iron_mine',    'barracks',     'hospital',
   'warehouse',  'research_lab', 'city_wall',    'tavern',
-  'recruit_post',
 ];
 
 // ── Expedition sites ──────────────────────────────────

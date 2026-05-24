@@ -214,9 +214,9 @@ class _SimRun {
       }
     }
 
-    // Recruit from recruit_post (auto-recruit in sim)
+    // Recruit from Training Pool (auto-recruit in sim)
     for (const b of map.buildingList) {
-      if (b.type !== 'recruit_post' || b.level < 1 || b.constructing || b.hp <= 0) continue;
+      if (b.type !== 'barracks' || b.level < 1 || b.constructing || b.hp <= 0) continue;
       if (b.campCount == null) {
         b.campMax = 6 + b.level * 4; b.campCount = b.campMax;
         b.campRestoreTimer = 0; b.campRecruitTimer = 0;

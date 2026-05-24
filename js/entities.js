@@ -166,8 +166,8 @@ class Soldier {
       if (bestE) {
         dTX = bestE.x; dTY = bestE.y;
       } else {
-        // Patrol: pick a random non-recruit_post building; refresh when reached or timer expires
-        const patrolBuildings = map ? map.buildingList.filter(b => b.hp > 0 && b.type !== 'recruit_post') : [];
+        // Patrol: pick a random building; refresh when reached or timer expires
+        const patrolBuildings = map ? map.buildingList.filter(b => b.hp > 0) : [];
         this._patrolTimer -= dt;
         const atTarget = this._patrolTarget &&
           Math.hypot(this.x - this._patrolTarget.x, this.y - this._patrolTarget.y) < TILE * 2;
@@ -548,7 +548,7 @@ function _findPath(fromX, fromY, toX, toY, map) {
       const nc = cur.c + dc, nr = cur.r + dr;
       if (nc < 0 || nc >= COLS || nr < 0 || nr >= ROWS) continue;
       if (map.isSolid(nc, nr)) continue;
-      if (map.hasBuilding(nc, nr)) { const b = map.getBuildingAt(nc, nr); if (b?.type !== 'recruit_post') continue; }
+      if (map.hasBuilding(nc, nr)) { const b = map.getBuildingAt(nc, nr); if (b?.type !== 'barracks') continue; }
       const ni = idx(nc, nr);
       const ng = cur.g + 1;
       if (ng < (gScore.get(ni) ?? Infinity)) {
@@ -575,7 +575,7 @@ function _blockedByBuilding(x, y, r, map, friendly = false) {
   const check = (cx, cy) => {
     const h = pixelToHex(cx, cy);
     if (!map.hasBuilding(h.c, h.r)) return false;
-    if (friendly) { const b = map.getBuildingAt(h.c, h.r); if (b?.type === 'recruit_post') return false; }
+    if (friendly) { const b = map.getBuildingAt(h.c, h.r); if (b?.type === 'barracks') return false; }
     return true;
   };
   return check(x-cr,y-cr) || check(x+cr,y-cr) || check(x-cr,y+cr) || check(x+cr,y+cr);
@@ -666,7 +666,7 @@ function _canMoveFriendly(x, y, r, map) {
     if (map.isSolid(t.c, t.r)) return true;
     if (!map.hasBuilding(t.c, t.r)) return false;
     const b = map.getBuildingAt(t.c, t.r);
-    return b?.type !== 'recruit_post';
+    return b?.type !== 'barracks';
   };
   return !check(x-cr,y-cr) && !check(x+cr,y-cr) && !check(x-cr,y+cr) && !check(x+cr,y+cr);
 }

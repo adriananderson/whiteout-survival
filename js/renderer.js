@@ -2,6 +2,7 @@
 
 const Renderer = (() => {
   let canvas, ctx, W, H;
+  let _rangeCanvas = null, _rangeCtx = null;
 
   function init(c) {
     canvas = c; ctx = c.getContext('2d');
@@ -548,6 +549,29 @@ const Renderer = (() => {
 
   // ── Forts ──────────────────────────────────────────────
   function drawForts(map, cam) {
+    // Render all tower range fills onto an offscreen canvas with solid colour,
+    // then composite once at low alpha — prevents circles stacking.
+    if (!_rangeCanvas || _rangeCanvas.width !== W || _rangeCanvas.height !== H) {
+      _rangeCanvas = document.createElement('canvas');
+      _rangeCanvas.width = W; _rangeCanvas.height = H;
+      _rangeCtx = _rangeCanvas.getContext('2d');
+    }
+    _rangeCtx.clearRect(0, 0, W, H);
+    _rangeCtx.fillStyle = '#3cb4ff';
+    _rangeCtx.strokeStyle = '#3cb4ff';
+    _rangeCtx.lineWidth = 1;
+    map.forts.forEach(f => {
+      if (f.dead || f.type !== 'tower') return;
+      const { x: sx, y: sy } = ws(f.x, f.y, cam);
+      _rangeCtx.beginPath();
+      _rangeCtx.arc(sx, sy, f.range, 0, Math.PI * 2);
+      _rangeCtx.fill();
+      _rangeCtx.stroke();
+    });
+    ctx.globalAlpha = 0.12;
+    ctx.drawImage(_rangeCanvas, 0, 0);
+    ctx.globalAlpha = 1;
+
     map.forts.forEach(f => {
       if (f.dead) return;
       const { x: sx, y: sy } = ws(f.x, f.y, cam);
@@ -655,11 +679,7 @@ const Renderer = (() => {
       ctx.beginPath(); ctx.arc(sx, sy-6, 8, 0, Math.PI*2); ctx.fill();
       ctx.strokeStyle = '#2090c0'; ctx.lineWidth = 2;
       ctx.beginPath(); ctx.arc(sx, sy-6, 8, 0, Math.PI*2); ctx.stroke();
-      // Glow
-      ctx.fillStyle = 'rgba(60,180,255,0.12)';
-      ctx.beginPath(); ctx.arc(sx, sy, f.range, 0, Math.PI*2); ctx.fill();
-      ctx.strokeStyle = 'rgba(60,180,255,0.18)'; ctx.lineWidth = 1;
-      ctx.beginPath(); ctx.arc(sx, sy, f.range, 0, Math.PI*2); ctx.stroke();
+      // (range ring drawn once in drawForts to avoid alpha stacking)
     } else {
       // Bubble Net — translucent foam barrier
       ctx.strokeStyle = f.hitFlash > 0 ? '#ff8888' : '#80d0ff';
